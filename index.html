@@ -3,112 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Простой видеозвонок</title>
+    <title>Аудиозвонок через Firebase</title>
     <style>
-        /* ... (стили те же, что были) ... */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             padding: 20px;
             background: #1a1a2e;
             color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
         }
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
+            max-width: 500px;
+            width: 100%;
+            background: #16213e;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #e94560;
         }
         .controls {
-            background: #16213e;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
             display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 20px;
         }
-        .controls input, .controls button {
-            padding: 10px 15px;
-            border-radius: 5px;
+        input, button {
+            padding: 12px;
+            border-radius: 30px;
             border: none;
             font-size: 16px;
+            outline: none;
         }
-        .controls input {
-            flex: 1;
-            min-width: 200px;
-        }
-        .controls button {
+        input {
             background: #0f3460;
+            color: white;
+            text-align: center;
+        }
+        button {
+            background: #e94560;
             color: white;
             cursor: pointer;
             transition: 0.2s;
+            font-weight: bold;
         }
-        .controls button:hover {
-            background: #e94560;
+        button:hover {
+            background: #ff6b6b;
         }
-        .videos {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            justify-content: center;
-        }
-        .video-container {
-            position: relative;
-            background: #0f3460;
-            border-radius: 10px;
-            overflow: hidden;
-            width: 100%;
-            max-width: 500px;
-            aspect-ratio: 4 / 3;
-        }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            background: black;
-        }
-        .label {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            background: rgba(0,0,0,0.6);
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-size: 14px;
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
         }
         .status {
             margin-top: 20px;
-            text-align: center;
             padding: 10px;
-            background: #16213e;
-            border-radius: 10px;
+            background: #0f3460;
+            border-radius: 30px;
+            font-size: 0.9rem;
         }
-        @media (max-width: 700px) {
-            .video-container {
-                max-width: 100%;
-            }
+        .microphone-control {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .microphone-control button {
+            flex: 1;
+            background: #0f3460;
+        }
+        .microphone-control button:hover {
+            background: #1a4a7a;
+        }
+        .call-id {
+            font-weight: bold;
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 30px;
+            margin: 15px 0;
+            word-break: break-all;
         }
     </style>
 </head>
 <body>
 <div class="container">
+    <h1>🎧 Аудиозвонок</h1>
     <div class="controls">
         <input type="text" id="roomId" placeholder="ID комнаты">
         <button id="createBtn">Создать звонок</button>
         <button id="joinBtn">Подключиться</button>
         <button id="hangupBtn" disabled>Завершить звонок</button>
-        <button id="toggleAudioBtn" disabled>🔊 Выкл. микрофон</button>
-        <button id="toggleVideoBtn" disabled>📹 Выкл. камеру</button>
     </div>
-    <div class="videos">
-        <div class="video-container">
-            <video id="localVideo" autoplay muted playsinline></video>
-            <div class="label">Вы</div>
-        </div>
-        <div class="video-container">
-            <video id="remoteVideo" autoplay playsinline></video>
-            <div class="label">Собеседник</div>
-        </div>
+    <div class="microphone-control">
+        <button id="toggleAudioBtn" disabled>🔊 Выкл. микрофон</button>
     </div>
     <div class="status" id="status">Статус: инициализация...</div>
 </div>
@@ -128,6 +121,7 @@
     import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs } from "firebase/firestore";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
+    // Ваши данные Firebase
     const firebaseConfig = {
         apiKey: "AIzaSyA_c8w0JZv63nAqKmXPvwtpTyhZE3gvqTM",
         authDomain: "messenger-bdcf5.firebaseapp.com",
@@ -142,24 +136,21 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
 
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
     const roomIdInput = document.getElementById('roomId');
     const createBtn = document.getElementById('createBtn');
     const joinBtn = document.getElementById('joinBtn');
     const hangupBtn = document.getElementById('hangupBtn');
     const toggleAudioBtn = document.getElementById('toggleAudioBtn');
-    const toggleVideoBtn = document.getElementById('toggleVideoBtn');
     const statusDiv = document.getElementById('status');
 
-    let localStream = null;
+    let localStream = null;       // аудиопоток
     let peerConnection = null;
     let currentRoomId = null;
     let currentUserId = null;
     let isCallActive = false;
     let audioEnabled = true;
-    let videoEnabled = true;
 
+    // STUN серверы для WebRTC
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -167,7 +158,7 @@
         ]
     };
 
-    // Аутентификация
+    // --- Аутентификация ---
     signInAnonymously(auth).catch(error => {
         console.error('Ошибка аутентификации:', error);
         statusDiv.textContent = 'Ошибка аутентификации. Проверьте настройки Firebase.';
@@ -176,10 +167,10 @@
     onAuthStateChanged(auth, (user) => {
         if (user) {
             currentUserId = user.uid;
-            statusDiv.textContent = 'Вы вошли. Можете создать или присоединиться к звонку.';
+            statusDiv.textContent = '✅ Вы вошли. Можете создать или присоединиться к звонку.';
             enableControls(true);
         } else {
-            statusDiv.textContent = 'Не удалось войти. Обновите страницу.';
+            statusDiv.textContent = '❌ Не удалось войти. Обновите страницу.';
             enableControls(false);
         }
     });
@@ -190,20 +181,22 @@
         if (!enabled) {
             hangupBtn.disabled = true;
             toggleAudioBtn.disabled = true;
-            toggleVideoBtn.disabled = true;
         }
     }
 
-    async function getMedia() {
+    // --- Запрос доступа только к микрофону ---
+    async function getMicrophone() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            localVideo.srcObject = stream;
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             localStream = stream;
+            // Можно воспроизвести локальный звук в динамик (но обычно не нужно)
+            // Для отладки можно создать скрытый audio элемент
+            // Но для простоты просто сохраняем поток
             return stream;
         } catch (err) {
-            console.error('Ошибка доступа к медиа:', err);
-            let msg = 'Не удалось получить доступ к камере/микрофону. ';
-            if (err.name === 'NotFoundError') msg += 'Устройства не найдены.';
+            console.error('Ошибка доступа к микрофону:', err);
+            let msg = '❌ Не удалось получить доступ к микрофону. ';
+            if (err.name === 'NotFoundError') msg += 'Микрофон не найден.';
             else if (err.name === 'NotAllowedError') msg += 'Разрешение отклонено.';
             else msg += 'Проверьте настройки.';
             statusDiv.textContent = msg;
@@ -211,16 +204,29 @@
         }
     }
 
+    // --- Создание peer connection (только аудио) ---
     async function createPeerConnection() {
         if (peerConnection) peerConnection.close();
         peerConnection = new RTCPeerConnection(configuration);
         if (localStream) {
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
         }
+        // При получении удалённого аудио создаём элемент <audio> и воспроизводим
         peerConnection.ontrack = (event) => {
-            if (remoteVideo.srcObject !== event.streams[0]) {
-                remoteVideo.srcObject = event.streams[0];
+            const remoteAudio = new Audio();
+            remoteAudio.srcObject = event.streams[0];
+            remoteAudio.autoplay = true;
+            // Убираем громкость на максимум
+            remoteAudio.volume = 1.0;
+            // Можно хранить ссылку, чтобы остановить позже, но пока просто воспроизводим
+            // При завершении звонка остановим все треки
+            if (window._remoteAudio) {
+                window._remoteAudio.pause();
+                window._remoteAudio.srcObject = null;
             }
+            window._remoteAudio = remoteAudio;
         };
         peerConnection.onicecandidate = (event) => {
             if (event.candidate && currentRoomId) {
@@ -230,13 +236,14 @@
         peerConnection.oniceconnectionstatechange = () => {
             console.log('ICE state:', peerConnection.iceConnectionState);
             if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
-                statusDiv.textContent = 'Соединение разорвано.';
+                statusDiv.textContent = '⚠️ Соединение разорвано.';
                 hangup();
             }
         };
         return peerConnection;
     }
 
+    // --- Сохранение ICE кандидата в Firestore ---
     async function saveIceCandidate(candidate) {
         if (!currentRoomId) return;
         const candidatesRef = collection(db, `calls/${currentRoomId}/candidates`);
@@ -249,6 +256,7 @@
         });
     }
 
+    // --- Прослушивание ICE кандидатов ---
     async function listenForIceCandidates(roomId) {
         const candidatesRef = collection(db, `calls/${roomId}/candidates`);
         return onSnapshot(candidatesRef, (snapshot) => {
@@ -267,6 +275,7 @@
         });
     }
 
+    // --- Создание offer (инициатор) ---
     async function createOffer() {
         if (!peerConnection) return;
         const offer = await peerConnection.createOffer();
@@ -278,9 +287,10 @@
             userId: currentUserId,
             timestamp: new Date()
         });
-        statusDiv.textContent = 'Ожидаем ответа...';
+        statusDiv.textContent = '📞 Ожидаем ответа...';
     }
 
+    // --- Создание answer (второй участник) ---
     async function createAnswer() {
         if (!peerConnection) return;
         const answer = await peerConnection.createAnswer();
@@ -292,11 +302,13 @@
             userId: currentUserId,
             timestamp: new Date()
         });
-        statusDiv.textContent = 'Соединение устанавливается...';
+        statusDiv.textContent = '🔊 Соединение устанавливается...';
     }
 
+    // --- Слушаем сигналы (offer/answer) ---
     async function listenForSignals(roomId, isInitiator) {
         if (!isInitiator) {
+            // Второй участник слушает offer
             const offerRef = doc(db, `calls/${roomId}/offers`, 'offer');
             return onSnapshot(offerRef, async (docSnap) => {
                 if (docSnap.exists() && !peerConnection) {
@@ -309,19 +321,21 @@
                 }
             });
         } else {
+            // Инициатор слушает answer
             const answerRef = doc(db, `calls/${roomId}/answers`, 'answer');
             return onSnapshot(answerRef, async (docSnap) => {
                 if (docSnap.exists() && peerConnection && peerConnection.remoteDescription === null) {
                     const data = docSnap.data();
                     if (data.userId !== currentUserId) {
                         await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                        statusDiv.textContent = 'Соединение установлено!';
+                        statusDiv.textContent = '✅ Соединение установлено! Можно говорить.';
                     }
                 }
             });
         }
     }
 
+    // --- Удаление комнаты и всех данных ---
     async function deleteRoom(roomId) {
         try {
             const candidatesSnapshot = await getDocs(collection(db, `calls/${roomId}/candidates`));
@@ -338,6 +352,7 @@
         }
     }
 
+    // --- Завершение звонка ---
     async function hangup() {
         if (currentRoomId) {
             await deleteRoom(currentRoomId);
@@ -348,27 +363,31 @@
         }
         if (localStream) {
             localStream.getTracks().forEach(track => track.stop());
-            localVideo.srcObject = null;
             localStream = null;
         }
-        remoteVideo.srcObject = null;
+        // Останавливаем удалённый аудио
+        if (window._remoteAudio) {
+            window._remoteAudio.pause();
+            window._remoteAudio.srcObject = null;
+            window._remoteAudio = null;
+        }
         isCallActive = false;
         currentRoomId = null;
         hangupBtn.disabled = true;
         toggleAudioBtn.disabled = true;
-        toggleVideoBtn.disabled = true;
-        statusDiv.textContent = 'Звонок завершён. Можете создать или подключиться к новому.';
+        statusDiv.textContent = '📴 Звонок завершён. Можете создать или подключиться к новому.';
         roomIdInput.value = '';
         enableControls(true);
     }
 
+    // --- Основная функция начала звонка ---
     async function startCall(roomId, isInitiator) {
         if (isCallActive) {
             await hangup();
         }
         currentRoomId = roomId;
         try {
-            await getMedia();
+            await getMicrophone(); // запрашиваем только микрофон
             await createPeerConnection();
 
             const unsubscribeIce = await listenForIceCandidates(roomId);
@@ -381,44 +400,42 @@
             isCallActive = true;
             hangupBtn.disabled = false;
             toggleAudioBtn.disabled = false;
-            toggleVideoBtn.disabled = false;
-            statusDiv.textContent = isInitiator ? 'Звонок создан. Отправьте ID другу.' : 'Подключаемся...';
+            statusDiv.textContent = isInitiator ? '🎤 Звонок создан. Отправьте ID другу.' : '🔗 Подключаемся...';
 
             window.__unsubscribes = [unsubscribeIce, unsubscribeSignal];
         } catch (err) {
             console.error(err);
-            let errorMsg = 'Ошибка при создании звонка. ';
+            let errorMsg = '❌ Ошибка при создании звонка. ';
             if (err.name === 'NotFoundError') {
-                errorMsg += 'Не найдена камера или микрофон. Подключите устройство и разрешите доступ.';
+                errorMsg += 'Микрофон не найден. Подключите устройство и разрешите доступ.';
             } else if (err.name === 'NotAllowedError') {
-                errorMsg += 'Вы не разрешили доступ к камере/микрофону.';
+                errorMsg += 'Вы не разрешили доступ к микрофону.';
             } else if (err.code === 'permission-denied') {
                 errorMsg += 'Нет прав доступа к Firestore. Проверьте правила безопасности.';
             } else {
                 errorMsg += 'Проверьте интернет и настройки Firestore.';
             }
             statusDiv.textContent = errorMsg;
-            // Если звонок уже был активен, завершаем его, иначе просто выходим
+            // Очистка при ошибке
             if (isCallActive) {
                 await hangup();
             } else {
-                // Очищаем частично созданные объекты
                 if (peerConnection) {
                     peerConnection.close();
                     peerConnection = null;
                 }
                 if (localStream) {
                     localStream.getTracks().forEach(track => track.stop());
-                    localVideo.srcObject = null;
                     localStream = null;
                 }
             }
         }
     }
 
+    // --- Создание комнаты (инициатор) ---
     createBtn.onclick = async () => {
         if (!currentUserId) {
-            statusDiv.textContent = 'Подождите, идёт вход...';
+            statusDiv.textContent = '⏳ Подождите, идёт вход...';
             return;
         }
         const roomId = generateRoomId();
@@ -432,40 +449,35 @@
             await startCall(roomId, true);
         } catch (err) {
             console.error('Ошибка создания комнаты:', err);
-            statusDiv.textContent = 'Ошибка создания комнаты. Проверьте правила Firestore.';
+            statusDiv.textContent = '❌ Ошибка создания комнаты. Проверьте правила Firestore.';
         }
     };
 
+    // --- Подключение к существующей комнате ---
     joinBtn.onclick = async () => {
         if (!currentUserId) {
-            statusDiv.textContent = 'Подождите, идёт вход...';
+            statusDiv.textContent = '⏳ Подождите, идёт вход...';
             return;
         }
         const roomId = roomIdInput.value.trim();
         if (!roomId) {
-            statusDiv.textContent = 'Введите ID комнаты';
+            statusDiv.textContent = '❌ Введите ID комнаты';
             return;
         }
         await startCall(roomId, false);
     };
 
+    // --- Завершение звонка ---
     hangupBtn.onclick = async () => {
         await hangup();
     };
 
+    // --- Включение/выключение микрофона ---
     toggleAudioBtn.onclick = () => {
         if (localStream) {
             audioEnabled = !audioEnabled;
             localStream.getAudioTracks().forEach(track => track.enabled = audioEnabled);
             toggleAudioBtn.textContent = audioEnabled ? "🔊 Выкл. микрофон" : "🔇 Вкл. микрофон";
-        }
-    };
-
-    toggleVideoBtn.onclick = () => {
-        if (localStream) {
-            videoEnabled = !videoEnabled;
-            localStream.getVideoTracks().forEach(track => track.enabled = videoEnabled);
-            toggleVideoBtn.textContent = videoEnabled ? "📹 Выкл. камеру" : "📹 Вкл. камеру";
         }
     };
 
