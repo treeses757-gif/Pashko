@@ -124,17 +124,18 @@
 </script>
 <script type="module">
     import { initializeApp } from "firebase/app";
-    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, deleteDoc as deleteSubDoc } from "firebase/firestore";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs } from "firebase/firestore";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-    // TODO: Замените на свои данные конфигурации Firebase
+    // Ваши данные Firebase
     const firebaseConfig = {
-        apiKey: "ВАШ_API_KEY",
-        authDomain: "ВАШ_AUTH_DOMAIN",
-        projectId: "ВАШ_PROJECT_ID",
-        storageBucket: "ВАШ_STORAGE_BUCKET",
-        messagingSenderId: "ВАШ_SENDER_ID",
-        appId: "ВАШ_APP_ID"
+        apiKey: "AIzaSyA_c8w0JZv63nAqKmXPvwtpTyhZE3gvqTM",
+        authDomain: "messenger-bdcf5.firebaseapp.com",
+        projectId: "messenger-bdcf5",
+        storageBucket: "messenger-bdcf5.firebasestorage.app",
+        messagingSenderId: "453832820878",
+        appId: "1:453832820878:web:e871089321db418e30a1df",
+        measurementId: "G-RD3DV3JG5K"
     };
 
     // Инициализация Firebase
@@ -162,7 +163,7 @@
     let audioEnabled = true;
     let videoEnabled = true;
 
-    // STUN серверы (для обхода NAT)
+    // STUN серверы
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -218,24 +219,20 @@
         }
         peerConnection = new RTCPeerConnection(configuration);
 
-        // Добавляем локальный трек
         if (localStream) {
             localStream.getTracks().forEach(track => {
                 peerConnection.addTrack(track, localStream);
             });
         }
 
-        // Обработка удаленного потока
         peerConnection.ontrack = (event) => {
             if (remoteVideo.srcObject !== event.streams[0]) {
                 remoteVideo.srcObject = event.streams[0];
             }
         };
 
-        // Сбор ICE кандидатов
         peerConnection.onicecandidate = (event) => {
             if (event.candidate && currentRoomId) {
-                // Сохраняем кандидата в Firestore
                 saveIceCandidate(event.candidate);
             }
         };
@@ -251,7 +248,6 @@
         return peerConnection;
     }
 
-    // --- Сохранение ICE кандидата в Firestore ---
     async function saveIceCandidate(candidate) {
         if (!currentRoomId) return;
         const candidatesRef = collection(db, `calls/${currentRoomId}/candidates`);
@@ -264,21 +260,17 @@
         });
     }
 
-    // --- Обработка ICE кандидатов из Firestore ---
-    async function listenForIceCandidates(roomId, userId) {
+    async function listenForIceCandidates(roomId) {
         const candidatesRef = collection(db, `calls/${roomId}/candidates`);
         const unsubscribe = onSnapshot(candidatesRef, (snapshot) => {
             snapshot.docChanges().forEach(async (change) => {
                 if (change.type === 'added') {
                     const data = change.doc.data();
-                    // Не добавляем свои кандидаты
-                    if (data.userId !== currentUserId) {
-                        if (peerConnection && data.candidate) {
-                            try {
-                                await peerConnection.addIceCandidate(new RTCIceCandidate(data));
-                            } catch (e) {
-                                console.error('Ошибка добавления ICE кандидата:', e);
-                            }
+                    if (data.userId !== currentUserId && peerConnection && data.candidate) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(data));
+                        } catch (e) {
+                            console.error('Ошибка добавления ICE кандидата:', e);
                         }
                     }
                 }
@@ -287,12 +279,10 @@
         return unsubscribe;
     }
 
-    // --- Создание offer (для инициатора) ---
     async function createOffer() {
         if (!peerConnection) return;
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
-        // Сохраняем offer в Firestore
         const offerRef = doc(db, `calls/${currentRoomId}/offers`, 'offer');
         await setDoc(offerRef, {
             sdp: peerConnection.localDescription.sdp,
@@ -303,7 +293,6 @@
         statusDiv.textContent = 'Ожидаем ответа...';
     }
 
-    // --- Создание answer (для второго участника) ---
     async function createAnswer() {
         if (!peerConnection) return;
         const answer = await peerConnection.createAnswer();
@@ -318,26 +307,21 @@
         statusDiv.textContent = 'Соединение устанавливается...';
     }
 
-    // --- Прослушивание offer и answer ---
     async function listenForSignals(roomId, isInitiator) {
-        // Слушаем offer (если мы не инициатор)
         if (!isInitiator) {
             const offerRef = doc(db, `calls/${roomId}/offers`, 'offer');
             const unsubscribeOffer = onSnapshot(offerRef, async (docSnap) => {
                 if (docSnap.exists() && !peerConnection) {
                     const data = docSnap.data();
                     if (data.userId !== currentUserId) {
-                        // Создаем peer connection и устанавливаем удаленное описание
                         await createPeerConnection();
                         await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                        // Создаем answer
                         await createAnswer();
                     }
                 }
             });
             return unsubscribeOffer;
         } else {
-            // Инициатор слушает answer
             const answerRef = doc(db, `calls/${roomId}/answers`, 'answer');
             const unsubscribeAnswer = onSnapshot(answerRef, async (docSnap) => {
                 if (docSnap.exists() && peerConnection && peerConnection.remoteDescription === null) {
@@ -352,12 +336,12 @@
         }
     }
 
-    // --- Очистка комнаты при завершении ---
     async function deleteRoom(roomId) {
         try {
-            // Удаляем подколлекции (candidates, offers, answers)
             const candidatesSnapshot = await getDocs(collection(db, `calls/${roomId}/candidates`));
-            candidatesSnapshot.forEach(doc => deleteSubDoc(doc.ref));
+            for (const docSnap of candidatesSnapshot.docs) {
+                await deleteDoc(docSnap.ref);
+            }
             const offerDoc = doc(db, `calls/${roomId}/offers`, 'offer');
             await deleteDoc(offerDoc).catch(() => {});
             const answerDoc = doc(db, `calls/${roomId}/answers`, 'answer');
@@ -368,7 +352,6 @@
         }
     }
 
-    // --- Завершение звонка ---
     async function hangup() {
         if (currentRoomId) {
             await deleteRoom(currentRoomId);
@@ -393,7 +376,6 @@
         enableControls(true);
     }
 
-    // --- Инициализация звонка (общая логика) ---
     async function startCall(roomId, isInitiator) {
         if (isCallActive) {
             await hangup();
@@ -403,9 +385,7 @@
             await getMedia();
             await createPeerConnection();
 
-            // Подписываемся на ICE кандидаты
-            const unsubscribeIce = await listenForIceCandidates(roomId, currentUserId);
-            // Подписываемся на сигнальные сообщения
+            const unsubscribeIce = await listenForIceCandidates(roomId);
             const unsubscribeSignal = await listenForSignals(roomId, isInitiator);
 
             if (isInitiator) {
@@ -418,7 +398,6 @@
             toggleVideoBtn.disabled = false;
             statusDiv.textContent = isInitiator ? 'Звонок создан. Отправьте ID другу.' : 'Подключаемся...';
 
-            // Сохраняем слушатели для очистки при завершении (можно добавить глобально)
             window.__unsubscribes = [unsubscribeIce, unsubscribeSignal];
         } catch (err) {
             console.error(err);
@@ -427,7 +406,6 @@
         }
     }
 
-    // --- Создание комнаты (инициатор) ---
     createBtn.onclick = async () => {
         if (!currentUserId) {
             statusDiv.textContent = 'Подождите, идёт вход...';
@@ -435,7 +413,6 @@
         }
         const roomId = generateRoomId();
         roomIdInput.value = roomId;
-        // Создаем документ комнаты
         await setDoc(doc(db, 'calls', roomId), {
             createdBy: currentUserId,
             createdAt: new Date(),
@@ -444,7 +421,6 @@
         await startCall(roomId, true);
     };
 
-    // --- Подключение к существующей комнате ---
     joinBtn.onclick = async () => {
         if (!currentUserId) {
             statusDiv.textContent = 'Подождите, идёт вход...';
@@ -455,9 +431,6 @@
             statusDiv.textContent = 'Введите ID комнаты';
             return;
         }
-        // Проверяем, существует ли комната
-        const roomRef = doc(db, 'calls', roomId);
-        // Для простоты просто пытаемся подключиться; если комната не существует, Firestore выдаст ошибку
         await startCall(roomId, false);
     };
 
@@ -465,7 +438,6 @@
         await hangup();
     };
 
-    // Управление микрофоном
     toggleAudioBtn.onclick = () => {
         if (localStream) {
             audioEnabled = !audioEnabled;
@@ -474,7 +446,6 @@
         }
     };
 
-    // Управление камерой
     toggleVideoBtn.onclick = () => {
         if (localStream) {
             videoEnabled = !videoEnabled;
@@ -486,11 +457,6 @@
     function generateRoomId() {
         return Math.random().toString(36).substring(2, 8).toUpperCase();
     }
-
-    // Вспомогательная функция для удаления документов (getDocs импорт)
-    import { getDocs, collection as getColRef } from "firebase/firestore";
-    window.getDocs = getDocs;
-    window.getColRef = getColRef;
 </script>
 </body>
 </html>
