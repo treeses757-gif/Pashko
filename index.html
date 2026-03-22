@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Простой видеозвонок</title>
     <style>
+        /* ... (стили те же, что были) ... */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
@@ -127,7 +128,6 @@
     import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs } from "firebase/firestore";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-    // Ваши данные Firebase
     const firebaseConfig = {
         apiKey: "AIzaSyA_c8w0JZv63nAqKmXPvwtpTyhZE3gvqTM",
         authDomain: "messenger-bdcf5.firebaseapp.com",
@@ -138,12 +138,10 @@
         measurementId: "G-RD3DV3JG5K"
     };
 
-    // Инициализация Firebase
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
     const auth = getAuth(app);
 
-    // DOM элементы
     const localVideo = document.getElementById('localVideo');
     const remoteVideo = document.getElementById('remoteVideo');
     const roomIdInput = document.getElementById('roomId');
@@ -154,7 +152,6 @@
     const toggleVideoBtn = document.getElementById('toggleVideoBtn');
     const statusDiv = document.getElementById('status');
 
-    // WebRTC переменные
     let localStream = null;
     let peerConnection = null;
     let currentRoomId = null;
@@ -163,7 +160,6 @@
     let audioEnabled = true;
     let videoEnabled = true;
 
-    // STUN серверы
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -171,7 +167,7 @@
         ]
     };
 
-    // --- Аутентификация ---
+    // Аутентификация
     signInAnonymously(auth).catch(error => {
         console.error('Ошибка аутентификации:', error);
         statusDiv.textContent = 'Ошибка аутентификации. Проверьте настройки Firebase.';
@@ -198,7 +194,6 @@
         }
     }
 
-    // --- Получение доступа к медиа ---
     async function getMedia() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -207,36 +202,31 @@
             return stream;
         } catch (err) {
             console.error('Ошибка доступа к медиа:', err);
-            statusDiv.textContent = 'Не удалось получить доступ к камере/микрофону. Проверьте разрешения.';
+            let msg = 'Не удалось получить доступ к камере/микрофону. ';
+            if (err.name === 'NotFoundError') msg += 'Устройства не найдены.';
+            else if (err.name === 'NotAllowedError') msg += 'Разрешение отклонено.';
+            else msg += 'Проверьте настройки.';
+            statusDiv.textContent = msg;
             throw err;
         }
     }
 
-    // --- Создание peer connection ---
     async function createPeerConnection() {
-        if (peerConnection) {
-            peerConnection.close();
-        }
+        if (peerConnection) peerConnection.close();
         peerConnection = new RTCPeerConnection(configuration);
-
         if (localStream) {
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
         }
-
         peerConnection.ontrack = (event) => {
             if (remoteVideo.srcObject !== event.streams[0]) {
                 remoteVideo.srcObject = event.streams[0];
             }
         };
-
         peerConnection.onicecandidate = (event) => {
             if (event.candidate && currentRoomId) {
                 saveIceCandidate(event.candidate);
             }
         };
-
         peerConnection.oniceconnectionstatechange = () => {
             console.log('ICE state:', peerConnection.iceConnectionState);
             if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
@@ -244,7 +234,6 @@
                 hangup();
             }
         };
-
         return peerConnection;
     }
 
@@ -262,7 +251,7 @@
 
     async function listenForIceCandidates(roomId) {
         const candidatesRef = collection(db, `calls/${roomId}/candidates`);
-        const unsubscribe = onSnapshot(candidatesRef, (snapshot) => {
+        return onSnapshot(candidatesRef, (snapshot) => {
             snapshot.docChanges().forEach(async (change) => {
                 if (change.type === 'added') {
                     const data = change.doc.data();
@@ -276,7 +265,6 @@
                 }
             });
         });
-        return unsubscribe;
     }
 
     async function createOffer() {
@@ -310,7 +298,7 @@
     async function listenForSignals(roomId, isInitiator) {
         if (!isInitiator) {
             const offerRef = doc(db, `calls/${roomId}/offers`, 'offer');
-            const unsubscribeOffer = onSnapshot(offerRef, async (docSnap) => {
+            return onSnapshot(offerRef, async (docSnap) => {
                 if (docSnap.exists() && !peerConnection) {
                     const data = docSnap.data();
                     if (data.userId !== currentUserId) {
@@ -320,10 +308,9 @@
                     }
                 }
             });
-            return unsubscribeOffer;
         } else {
             const answerRef = doc(db, `calls/${roomId}/answers`, 'answer');
-            const unsubscribeAnswer = onSnapshot(answerRef, async (docSnap) => {
+            return onSnapshot(answerRef, async (docSnap) => {
                 if (docSnap.exists() && peerConnection && peerConnection.remoteDescription === null) {
                     const data = docSnap.data();
                     if (data.userId !== currentUserId) {
@@ -332,7 +319,6 @@
                     }
                 }
             });
-            return unsubscribeAnswer;
         }
     }
 
@@ -401,8 +387,32 @@
             window.__unsubscribes = [unsubscribeIce, unsubscribeSignal];
         } catch (err) {
             console.error(err);
-            statusDiv.textContent = 'Ошибка при создании звонка. Проверьте доступ к медиа и интернет.';
-            hangup();
+            let errorMsg = 'Ошибка при создании звонка. ';
+            if (err.name === 'NotFoundError') {
+                errorMsg += 'Не найдена камера или микрофон. Подключите устройство и разрешите доступ.';
+            } else if (err.name === 'NotAllowedError') {
+                errorMsg += 'Вы не разрешили доступ к камере/микрофону.';
+            } else if (err.code === 'permission-denied') {
+                errorMsg += 'Нет прав доступа к Firestore. Проверьте правила безопасности.';
+            } else {
+                errorMsg += 'Проверьте интернет и настройки Firestore.';
+            }
+            statusDiv.textContent = errorMsg;
+            // Если звонок уже был активен, завершаем его, иначе просто выходим
+            if (isCallActive) {
+                await hangup();
+            } else {
+                // Очищаем частично созданные объекты
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localVideo.srcObject = null;
+                    localStream = null;
+                }
+            }
         }
     }
 
@@ -413,12 +423,17 @@
         }
         const roomId = generateRoomId();
         roomIdInput.value = roomId;
-        await setDoc(doc(db, 'calls', roomId), {
-            createdBy: currentUserId,
-            createdAt: new Date(),
-            active: true
-        });
-        await startCall(roomId, true);
+        try {
+            await setDoc(doc(db, 'calls', roomId), {
+                createdBy: currentUserId,
+                createdAt: new Date(),
+                active: true
+            });
+            await startCall(roomId, true);
+        } catch (err) {
+            console.error('Ошибка создания комнаты:', err);
+            statusDiv.textContent = 'Ошибка создания комнаты. Проверьте правила Firestore.';
+        }
     };
 
     joinBtn.onclick = async () => {
