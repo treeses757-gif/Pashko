@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Аудиозвонок через Firebase</title>
+    <title>Аудиозвонок (упрощённый)</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -81,24 +81,21 @@
         .microphone-control button:hover {
             background: #1a4a7a;
         }
-        .call-id {
-            font-weight: bold;
+        .test-btn {
             background: #0f3460;
-            padding: 10px;
-            border-radius: 30px;
-            margin: 15px 0;
-            word-break: break-all;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>🎧 Аудиозвонок</h1>
+    <h1>🎧 Аудиозвонок (упрощённый)</h1>
     <div class="controls">
         <input type="text" id="roomId" placeholder="ID комнаты">
         <button id="createBtn">Создать звонок</button>
         <button id="joinBtn">Подключиться</button>
         <button id="hangupBtn" disabled>Завершить звонок</button>
+        <button id="testBtn" class="test-btn">🔍 Проверить Firebase</button>
     </div>
     <div class="microphone-control">
         <button id="toggleAudioBtn" disabled>🔊 Выкл. микрофон</button>
@@ -118,7 +115,7 @@
 </script>
 <script type="module">
     import { initializeApp } from "firebase/app";
-    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs } from "firebase/firestore";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot, deleteDoc, updateDoc } from "firebase/firestore";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
     const firebaseConfig = {
@@ -135,12 +132,14 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
 
+    // DOM элементы
     const roomIdInput = document.getElementById('roomId');
     const createBtn = document.getElementById('createBtn');
     const joinBtn = document.getElementById('joinBtn');
     const hangupBtn = document.getElementById('hangupBtn');
     const toggleAudioBtn = document.getElementById('toggleAudioBtn');
     const statusDiv = document.getElementById('status');
+    const testBtn = document.getElementById('testBtn');
 
     let localStream = null;
     let peerConnection = null;
@@ -149,31 +148,7 @@
     let isCallActive = false;
     let audioEnabled = true;
 
-    // Буфер для ICE кандидатов, пришедших до установки remote description
-    let pendingIceCandidates = [];
-
-    // Простой звук при подключении (генерируем через Web Audio)
-    function playConnectSound() {
-        try {
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            oscillator.connect(gain);
-            gain.connect(audioCtx.destination);
-            oscillator.frequency.value = 880; // нота ля
-            gain.gain.value = 0.3;
-            oscillator.start();
-            gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
-            oscillator.stop(audioCtx.currentTime + 0.5);
-            // Возобновляем контекст, если он приостановлен
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-        } catch(e) {
-            console.warn('Не удалось воспроизвести звук', e);
-        }
-    }
-
+    // Конфигурация STUN
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -181,18 +156,37 @@
         ]
     };
 
-    // Аутентификация
+    // Вспомогательная функция для воспроизведения звука подключения
+    function playConnectSound() {
+        try {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            oscillator.connect(gain);
+            gain.connect(audioCtx.destination);
+            oscillator.frequency.value = 880;
+            gain.gain.value = 0.3;
+            oscillator.start();
+            gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+            oscillator.stop(audioCtx.currentTime + 0.5);
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        } catch(e) { console.warn('Звук не воспроизведён', e); }
+    }
+
+    // --- Аутентификация ---
     signInAnonymously(auth).catch(error => {
-        console.error('Ошибка аутентификации:', error);
-        statusDiv.textContent = 'Ошибка аутентификации. Проверьте настройки Firebase.';
+        console.error('Auth error:', error);
+        statusDiv.textContent = 'Ошибка аутентификации: ' + error.message;
     });
 
     onAuthStateChanged(auth, (user) => {
         if (user) {
             currentUserId = user.uid;
-            statusDiv.textContent = '✅ Вы вошли. Можете создать или присоединиться к звонку.';
+            console.log('✅ Аутентификация успешна, UID:', currentUserId);
+            statusDiv.textContent = '✅ Вы вошли. Можете создать или присоединиться.';
             enableControls(true);
         } else {
+            console.log('❌ Не удалось войти');
             statusDiv.textContent = '❌ Не удалось войти. Обновите страницу.';
             enableControls(false);
         }
@@ -207,200 +201,171 @@
         }
     }
 
+    // --- Получение микрофона ---
     async function getMicrophone() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             localStream = stream;
+            console.log('🎤 Микрофон получен');
             return stream;
         } catch (err) {
-            console.error('Ошибка доступа к микрофону:', err);
-            let msg = '❌ Не удалось получить доступ к микрофону. ';
-            if (err.name === 'NotFoundError') msg += 'Микрофон не найден.';
-            else if (err.name === 'NotAllowedError') msg += 'Разрешение отклонено.';
-            else msg += 'Проверьте настройки.';
-            statusDiv.textContent = msg;
+            console.error('Ошибка микрофона:', err);
+            statusDiv.textContent = '❌ Не удалось получить доступ к микрофону.';
             throw err;
         }
     }
 
+    // --- Создание PeerConnection ---
     async function createPeerConnection() {
         if (peerConnection) peerConnection.close();
         peerConnection = new RTCPeerConnection(configuration);
+        console.log('🔄 PeerConnection создан');
+
         if (localStream) {
             localStream.getTracks().forEach(track => {
                 peerConnection.addTrack(track, localStream);
+                console.log('➕ Трек добавлен в PC');
             });
         }
 
         peerConnection.ontrack = (event) => {
+            console.log('📡 Получен удалённый трек');
             const remoteAudio = new Audio();
             remoteAudio.srcObject = event.streams[0];
             remoteAudio.autoplay = true;
             remoteAudio.volume = 1.0;
-            if (window._remoteAudio) {
-                window._remoteAudio.pause();
-                window._remoteAudio.srcObject = null;
-            }
+            if (window._remoteAudio) window._remoteAudio.pause();
             window._remoteAudio = remoteAudio;
-            // При первом получении трека — играем звук подключения
             playConnectSound();
+            statusDiv.textContent = '✅ Соединение установлено! Можно говорить.';
         };
 
         peerConnection.onicecandidate = (event) => {
             if (event.candidate && currentRoomId) {
-                saveIceCandidate(event.candidate);
+                console.log('🧊 ICE кандидат сгенерирован, сохраняем в Firestore');
+                saveSignalToFirestore('candidate', event.candidate);
             }
         };
 
         peerConnection.oniceconnectionstatechange = () => {
-            console.log('ICE state:', peerConnection.iceConnectionState);
-            if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+            console.log('❄️ ICE состояние:', peerConnection.iceConnectionState);
+            if (peerConnection.iceConnectionState === 'connected') {
+                statusDiv.textContent = '✅ Соединение установлено!';
+            } else if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
                 statusDiv.textContent = '⚠️ Соединение разорвано.';
                 hangup();
-            } else if (peerConnection.iceConnectionState === 'connected') {
-                statusDiv.textContent = '✅ Соединение установлено! Можно говорить.';
             }
         };
+
         return peerConnection;
     }
 
-    async function saveIceCandidate(candidate) {
+    // --- Сохранение сигнала (offer/answer/candidate) в Firestore ---
+    async function saveSignalToFirestore(type, data) {
         if (!currentRoomId) return;
-        const candidatesRef = collection(db, `calls/${currentRoomId}/candidates`);
-        await addDoc(candidatesRef, {
-            candidate: candidate.candidate,
-            sdpMid: candidate.sdpMid,
-            sdpMLineIndex: candidate.sdpMLineIndex,
-            userId: currentUserId,
-            timestamp: new Date()
-        });
-    }
-
-    // Функция для безопасного добавления ICE кандидата с буферизацией
-    async function addIceCandidateWithBuffer(candidate) {
-        if (!peerConnection) return;
-        if (peerConnection.remoteDescription) {
-            // Уже есть remote description — добавляем сразу
-            try {
-                await peerConnection.addIceCandidate(candidate);
-            } catch (e) {
-                console.error('Ошибка добавления ICE кандидата:', e);
+        const signalRef = doc(db, `calls/${currentRoomId}`);
+        const fieldName = type === 'offer' ? 'offer' : (type === 'answer' ? 'answer' : 'candidates');
+        try {
+            if (type === 'candidate') {
+                // Для кандидатов используем массив
+                const docSnap = await getDoc(signalRef);
+                const candidates = docSnap.exists() && docSnap.data().candidates ? docSnap.data().candidates : [];
+                candidates.push({
+                    candidate: data.candidate,
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex,
+                    userId: currentUserId,
+                    timestamp: Date.now()
+                });
+                await updateDoc(signalRef, { candidates });
+            } else {
+                await setDoc(signalRef, { [fieldName]: data }, { merge: true });
             }
-        } else {
-            // remote description ещё не установлен — сохраняем в буфер
-            pendingIceCandidates.push(candidate);
+            console.log(`📤 Сохранён ${type}`);
+        } catch (e) {
+            console.error(`Ошибка сохранения ${type}:`, e);
         }
     }
 
-    // Добавляет все накопленные кандидаты после установки remote description
-    async function flushPendingCandidates() {
-        if (!peerConnection || !peerConnection.remoteDescription) return;
-        for (const candidate of pendingIceCandidates) {
-            try {
-                await peerConnection.addIceCandidate(candidate);
-            } catch (e) {
-                console.error('Ошибка добавления накопленного кандидата:', e);
+    // --- Слушаем сигналы из Firestore ---
+    function listenForSignals(roomId, isInitiator) {
+        const signalRef = doc(db, `calls/${roomId}`);
+        return onSnapshot(signalRef, async (docSnap) => {
+            if (!docSnap.exists()) return;
+            const data = docSnap.data();
+            console.log('📥 Получены сигналы:', Object.keys(data));
+
+            // Обработка offer (если мы не инициатор)
+            if (!isInitiator && data.offer && !peerConnection) {
+                console.log('📞 Получен offer, создаём PC и отвечаем');
+                if (data.offer.userId === currentUserId) return;
+                await createPeerConnection();
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer.sdp));
+                // Добавляем накопленные кандидаты (если есть)
+                if (data.candidates) {
+                    for (const cand of data.candidates) {
+                        if (cand.userId !== currentUserId) {
+                            try {
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+                            } catch(e) { console.warn('Ошибка добавления кандидата', e); }
+                        }
+                    }
+                }
+                // Создаём answer
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                await saveSignalToFirestore('answer', {
+                    sdp: peerConnection.localDescription,
+                    userId: currentUserId
+                });
+                statusDiv.textContent = '🔊 Соединение устанавливается...';
             }
-        }
-        pendingIceCandidates = [];
-    }
 
-    async function listenForIceCandidates(roomId) {
-        const candidatesRef = collection(db, `calls/${roomId}/candidates`);
-        return onSnapshot(candidatesRef, (snapshot) => {
-            snapshot.docChanges().forEach(async (change) => {
-                if (change.type === 'added') {
-                    const data = change.doc.data();
-                    if (data.userId !== currentUserId && data.candidate) {
-                        const candidate = new RTCIceCandidate({
-                            candidate: data.candidate,
-                            sdpMid: data.sdpMid,
-                            sdpMLineIndex: data.sdpMLineIndex
-                        });
-                        await addIceCandidateWithBuffer(candidate);
+            // Обработка answer (если мы инициатор)
+            if (isInitiator && data.answer && peerConnection && peerConnection.remoteDescription === null) {
+                console.log('📞 Получен answer, устанавливаем remote description');
+                if (data.answer.userId === currentUserId) return;
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer.sdp));
+                // Добавляем накопленные кандидаты
+                if (data.candidates) {
+                    for (const cand of data.candidates) {
+                        if (cand.userId !== currentUserId) {
+                            try {
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+                            } catch(e) { console.warn('Ошибка добавления кандидата', e); }
+                        }
                     }
                 }
-            });
+                statusDiv.textContent = '✅ Соединение установлено!';
+                playConnectSound();
+            }
+
+            // Обработка новых кандидатов (для уже существующего PC)
+            if (peerConnection && data.candidates) {
+                for (const cand of data.candidates) {
+                    if (cand.userId !== currentUserId) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+                        } catch(e) { console.warn('Ошибка добавления кандидата', e); }
+                    }
+                }
+            }
         });
     }
 
-    async function createOffer() {
-        if (!peerConnection) return;
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        const offerRef = doc(db, `calls/${currentRoomId}/offers`, 'offer');
-        await setDoc(offerRef, {
-            sdp: peerConnection.localDescription.sdp,
-            type: peerConnection.localDescription.type,
-            userId: currentUserId,
-            timestamp: new Date()
-        });
-        statusDiv.textContent = '📞 Ожидаем ответа...';
-    }
-
-    async function createAnswer() {
-        if (!peerConnection) return;
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        const answerRef = doc(db, `calls/${currentRoomId}/answers`, 'answer');
-        await setDoc(answerRef, {
-            sdp: peerConnection.localDescription.sdp,
-            type: peerConnection.localDescription.type,
-            userId: currentUserId,
-            timestamp: new Date()
-        });
-        statusDiv.textContent = '🔊 Соединение устанавливается...';
-    }
-
-    async function listenForSignals(roomId, isInitiator) {
-        if (!isInitiator) {
-            const offerRef = doc(db, `calls/${roomId}/offers`, 'offer');
-            return onSnapshot(offerRef, async (docSnap) => {
-                if (docSnap.exists() && !peerConnection) {
-                    const data = docSnap.data();
-                    if (data.userId !== currentUserId) {
-                        await createPeerConnection();
-                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                        // После установки remote description добавляем накопленные кандидаты
-                        await flushPendingCandidates();
-                        await createAnswer();
-                    }
-                }
-            });
-        } else {
-            const answerRef = doc(db, `calls/${roomId}/answers`, 'answer');
-            return onSnapshot(answerRef, async (docSnap) => {
-                if (docSnap.exists() && peerConnection && peerConnection.remoteDescription === null) {
-                    const data = docSnap.data();
-                    if (data.userId !== currentUserId) {
-                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-                        // После установки remote description добавляем накопленные кандидаты
-                        await flushPendingCandidates();
-                        statusDiv.textContent = '✅ Соединение установлено! Можно говорить.';
-                        playConnectSound(); // звук при подключении
-                    }
-                }
-            });
-        }
-    }
-
+    // --- Удаление комнаты ---
     async function deleteRoom(roomId) {
         try {
-            const candidatesSnapshot = await getDocs(collection(db, `calls/${roomId}/candidates`));
-            for (const docSnap of candidatesSnapshot.docs) {
-                await deleteDoc(docSnap.ref);
-            }
-            const offerDoc = doc(db, `calls/${roomId}/offers`, 'offer');
-            await deleteDoc(offerDoc).catch(() => {});
-            const answerDoc = doc(db, `calls/${roomId}/answers`, 'answer');
-            await deleteDoc(answerDoc).catch(() => {});
-            await deleteDoc(doc(db, 'calls', roomId));
+            await deleteDoc(doc(db, `calls/${roomId}`));
+            console.log('🗑️ Комната удалена');
         } catch (e) {
             console.error('Ошибка удаления комнаты:', e);
         }
     }
 
+    // --- Завершение звонка ---
     async function hangup() {
+        console.log('🔚 Завершение звонка');
         if (currentRoomId) {
             await deleteRoom(currentRoomId);
         }
@@ -417,66 +382,52 @@
             window._remoteAudio.srcObject = null;
             window._remoteAudio = null;
         }
-        pendingIceCandidates = [];
         isCallActive = false;
         currentRoomId = null;
         hangupBtn.disabled = true;
         toggleAudioBtn.disabled = true;
-        statusDiv.textContent = '📴 Звонок завершён. Можете создать или подключиться к новому.';
+        statusDiv.textContent = '📴 Звонок завершён.';
         roomIdInput.value = '';
         enableControls(true);
     }
 
+    // --- Инициировать звонок (общий код) ---
     async function startCall(roomId, isInitiator) {
-        if (isCallActive) {
-            await hangup();
-        }
+        if (isCallActive) await hangup();
         currentRoomId = roomId;
         try {
             await getMicrophone();
             await createPeerConnection();
 
-            const unsubscribeIce = await listenForIceCandidates(roomId);
-            const unsubscribeSignal = await listenForSignals(roomId, isInitiator);
+            // Начинаем слушать сигналы
+            const unsubscribe = listenForSignals(roomId, isInitiator);
+            window._unsubscribe = unsubscribe;
 
             if (isInitiator) {
-                await createOffer();
+                // Создаём offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                await saveSignalToFirestore('offer', {
+                    sdp: peerConnection.localDescription,
+                    userId: currentUserId
+                });
+                statusDiv.textContent = '🎤 Звонок создан. Отправьте ID другу.';
+                console.log('📤 Offer отправлен');
+            } else {
+                statusDiv.textContent = '🔗 Подключаемся...';
             }
 
             isCallActive = true;
             hangupBtn.disabled = false;
             toggleAudioBtn.disabled = false;
-            statusDiv.textContent = isInitiator ? '🎤 Звонок создан. Отправьте ID другу.' : '🔗 Подключаемся...';
-
-            window.__unsubscribes = [unsubscribeIce, unsubscribeSignal];
         } catch (err) {
-            console.error(err);
-            let errorMsg = '❌ Ошибка при создании звонка. ';
-            if (err.name === 'NotFoundError') {
-                errorMsg += 'Микрофон не найден. Подключите устройство и разрешите доступ.';
-            } else if (err.name === 'NotAllowedError') {
-                errorMsg += 'Вы не разрешили доступ к микрофону.';
-            } else if (err.code === 'permission-denied') {
-                errorMsg += 'Нет прав доступа к Firestore. Проверьте правила безопасности.';
-            } else {
-                errorMsg += 'Проверьте интернет и настройки Firestore.';
-            }
-            statusDiv.textContent = errorMsg;
-            if (isCallActive) {
-                await hangup();
-            } else {
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
-                }
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                    localStream = null;
-                }
-            }
+            console.error('Ошибка startCall:', err);
+            statusDiv.textContent = '❌ Ошибка: ' + err.message;
+            await hangup();
         }
     }
 
+    // --- Создание комнаты (инициатор) ---
     createBtn.onclick = async () => {
         if (!currentUserId) {
             statusDiv.textContent = '⏳ Подождите, идёт вход...';
@@ -485,9 +436,10 @@
         const roomId = generateRoomId();
         roomIdInput.value = roomId;
         try {
-            await setDoc(doc(db, 'calls', roomId), {
+            // Создаём документ комнаты (просто для инициализации)
+            await setDoc(doc(db, `calls/${roomId}`), {
                 createdBy: currentUserId,
-                createdAt: new Date(),
+                createdAt: Date.now(),
                 active: true
             });
             await startCall(roomId, true);
@@ -497,6 +449,7 @@
         }
     };
 
+    // --- Подключение к существующей комнате ---
     joinBtn.onclick = async () => {
         if (!currentUserId) {
             statusDiv.textContent = '⏳ Подождите, идёт вход...';
@@ -505,6 +458,13 @@
         const roomId = roomIdInput.value.trim();
         if (!roomId) {
             statusDiv.textContent = '❌ Введите ID комнаты';
+            return;
+        }
+        // Проверяем, существует ли комната
+        const roomRef = doc(db, `calls/${roomId}`);
+        const roomSnap = await getDoc(roomRef);
+        if (!roomSnap.exists()) {
+            statusDiv.textContent = '❌ Комната не существует. Проверьте ID.';
             return;
         }
         await startCall(roomId, false);
@@ -519,6 +479,26 @@
             audioEnabled = !audioEnabled;
             localStream.getAudioTracks().forEach(track => track.enabled = audioEnabled);
             toggleAudioBtn.textContent = audioEnabled ? "🔊 Выкл. микрофон" : "🔇 Вкл. микрофон";
+        }
+    };
+
+    // --- Проверка подключения к Firebase ---
+    testBtn.onclick = async () => {
+        try {
+            statusDiv.textContent = 'Проверка...';
+            const testRef = doc(db, 'test', 'connection');
+            await setDoc(testRef, { timestamp: Date.now() });
+            const testSnap = await getDoc(testRef);
+            if (testSnap.exists()) {
+                statusDiv.textContent = '✅ Firebase работает! Правила разрешают запись.';
+                console.log('Firebase test success');
+            } else {
+                statusDiv.textContent = '⚠️ Firebase доступен, но тестовый документ не найден.';
+            }
+            await deleteDoc(testRef);
+        } catch (err) {
+            console.error('Firebase test error:', err);
+            statusDiv.textContent = '❌ Ошибка Firebase: ' + err.message + '. Проверьте правила Firestore и аутентификацию.';
         }
     };
 
